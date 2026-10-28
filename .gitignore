@@ -1,0 +1,17 @@
+/.bundle/
+/pkg/
+/tmp/
+/target/
+/lib/sequel/sqlformat/*.so
+/lib/sequel/sqlformat/*.bundle
+/lib/sequel/sqlformat/[0-9]*/
+/claude_stuff/
+/.claude/worktrees/
+*.gem
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*

@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "sequel_sqlformat",
+  "project_id": "9fa68806-681c-4831-bb56-8ac576e85844"
+}
