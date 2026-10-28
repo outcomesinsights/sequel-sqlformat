@@ -33,7 +33,7 @@ jobs:
           ruby-version: "3.4"
           bundler-cache: true
           cargo-cache: true
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
       - run: just fmt-check lint hygiene
 
   # `just test`: builds the extension from source and runs the suite on each supported
@@ -57,7 +57,7 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
           cargo-cache: true
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
       - run: just test
 
   # `just package-check`: the built source gem installs into an empty GEM_HOME and works.
@@ -74,7 +74,7 @@ jobs:
           ruby-version: "3.4"
           bundler-cache: true
           cargo-cache: true
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
       - run: just package-check # zizmor: ignore[adhoc-packages]
 
   # The one check that branch protection and release.yml read. It passes only when every
