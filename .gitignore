@@ -15,3 +15,7 @@
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+# CI's Ruby setup (`bundler-cache: true`) installs gems into ./vendor/bundle. Some gems
+# ship .github/workflows files, and zizmor audits every workflow it finds unless git
+# ignores the path.
+/vendor/
