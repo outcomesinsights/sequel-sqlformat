@@ -151,14 +151,19 @@ jobs:
   # Each precompiled gem, on a runner of its own platform and each supported Ruby:
   # install it with no Rust toolchain into an empty GEM_HOME, require the precompiled
   # library (not a fresh build), and format SQL.
+  #
+  # Each platform and its runner are ONE matrix value. Listed under `include:` beside
+  # `ruby:`, each entry was merged into every Ruby combination and overwrote the one
+  # before it, so the 2026-10-28 dry run checked only arm64-darwin, three times.
   check:
+    name: check (${{ matrix.target.platform }}, Ruby ${{ matrix.ruby }})
     needs: [verify, cross-gem]
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.target.runner }}
     permissions: {}
     strategy:
       fail-fast: false
       matrix:
-        include:
+        target:
           - { platform: x86_64-linux, runner: ubuntu-latest }
           - { platform: aarch64-linux, runner: ubuntu-24.04-arm }
           - { platform: x86_64-darwin, runner: macos-15-intel }
@@ -171,9 +176,11 @@ jobs:
           bundler-cache: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: gem-${{ matrix.platform }}
+          name: gem-${{ matrix.target.platform }}
           path: gems
       - name: Install the precompiled gem and format SQL with it
+        env:
+          PLATFORM: ${{ matrix.target.platform }}
         run: | # zizmor: ignore[adhoc-packages]
           set -euo pipefail
           home=$(mktemp -d)
@@ -184,6 +191,8 @@ jobs:
           # shellcheck disable=SC2016
           ruby -e '
             abort "rb_sys was installed, so the precompiled gem still depends on it" if Gem::Specification.find_all_by_name("rb_sys").any?
+            spec = Gem::Specification.find_by_name("sequel-sqlformat")
+            abort "installed the #{spec.platform} gem, expected #{ENV.fetch("PLATFORM")}" unless spec.platform.to_s == ENV.fetch("PLATFORM")
             require "sequel"
             db = Sequel.mock(host: :postgres).extension(:sqlformat)
             minor = RUBY_VERSION[/\A\d+\.\d+/]
