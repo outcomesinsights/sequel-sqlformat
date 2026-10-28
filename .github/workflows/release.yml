@@ -19,6 +19,10 @@ on:
   push:
     tags:
       - "v*"
+  # A dry run: started by hand on main, it builds every gem and installs each
+  # precompiled gem on its own platform, and publishes nothing (the publish job runs
+  # only for a tag). Run it before a release: `gh workflow run release.yml --ref main`.
+  workflow_dispatch:
 
 permissions: {}
 
@@ -45,10 +49,13 @@ jobs:
         id: version
         env:
           TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           version=$(ruby -e 'require "./lib/sequel/sqlformat/version"; print Sequel::SQLFormat::VERSION')
-          echo "tag=$TAG version.rb=$version"
-          if [[ "$TAG" != "v$version" ]]; then
+          echo "ref=$TAG ($REF_TYPE) version.rb=$version"
+          if [[ "$REF_TYPE" != "tag" ]]; then
+            echo "Dry run on $TAG: no tag to check, nothing will be published."
+          elif [[ "$TAG" != "v$version" ]]; then
             echo "::error::Tag $TAG does not match Sequel::SQLFormat::VERSION $version; refusing to publish"
             exit 1
           fi
@@ -189,6 +196,7 @@ jobs:
   # Holds publish rights, so it installs no bundle and runs no development dependency.
   publish:
     needs: [verify, source-gem, check]
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment: release
     # Required by the OIDC token exchange; scoped to this job only.
