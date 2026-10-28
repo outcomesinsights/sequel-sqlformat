@@ -1,0 +1,13 @@
+[package]
+name = "sequel_sqlformat"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+magnus = "0.9"
+sqlformat = "0.5"

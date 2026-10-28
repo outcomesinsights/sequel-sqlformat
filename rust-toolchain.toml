@@ -1,0 +1,5 @@
+# The Rust toolchain for building the extension. rustup reads this file, and so does
+# oxidize-rb's setup action in CI. sqlformat 0.5 needs rustc 1.84 or later.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
