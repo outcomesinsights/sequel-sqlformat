@@ -1,0 +1,39 @@
+version: 2
+
+# Monthly, with a 7-day cooldown, as in the sibling OI gems: a release younger than a
+# week is skipped that month, so a yanked or hotfixed release never reaches a PR.
+# dependabot-auto-merge.yml merges patch and minor bumps once ci passes.
+updates:
+  - package-ecosystem: bundler
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  # The Rust crates in Cargo.lock: magnus, rb-sys and sqlformat.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    groups:
+      # A group's update-type is the largest in it, so a group with a major waits
+      # for a human; the auto-merge workflow allows only patch and minor.
+      actions:
+        update-types: ["minor", "patch", "major"]

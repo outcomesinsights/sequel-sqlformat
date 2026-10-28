@@ -1,0 +1,242 @@
+# Publishes sequel-sqlformat to rubygems.org when a v* tag is pushed: one source gem and
+# one precompiled gem for each platform in the Rakefile's CROSS_PLATFORMS.
+#
+# To cut a release (CLAUDE.md, "Releasing"): bump VERSION in
+# lib/sequel/sqlformat/version.rb, update Gemfile.lock and CHANGELOG.md, land that commit
+# on main, wait for CI to pass on the push, then push the matching tag:
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The FILE NAME and the ENVIRONMENT are part of the rubygems.org trusted publisher
+# registration (owner outcomesinsights, repository sequel-sqlformat, workflow release.yml,
+# environment release). Renaming this file, or changing `environment:` on the publish
+# job, makes rubygems refuse the token. No API key is stored anywhere.
+#
+# Actions are pinned to commit SHAs (a tag can be moved to other code); Dependabot keeps
+# the pins current.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # CI never runs on a tag, so this job decides whether the tagged commit was tested.
+  # It fails closed: a tag pushed before CI finishes, a cancelled run, or an API error
+  # blocks the release. Re-run this workflow once CI is green.
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Refuse unless the tag matches Sequel::SQLFormat::VERSION
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(ruby -e 'require "./lib/sequel/sqlformat/version"; print Sequel::SQLFormat::VERSION')
+          echo "tag=$TAG version.rb=$version"
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::Tag $TAG does not match Sequel::SQLFormat::VERSION $version; refusing to publish"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # Only main ships. Without this, a tag on a pull-request commit would publish
+      # code that never landed.
+      - name: Require the tagged commit to be on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          status=$(gh api "repos/$REPO/compare/$SHA...main" --jq .status)
+          echo "main relative to $SHA: $status"
+          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
+            echo "::error::$SHA is not on main ($status); refusing to publish"
+            exit 1
+          fi
+      # A successful run of the ci.yml FILE, started by a push to main, for exactly this
+      # commit. Not any check named `ci`: pull-request runs report that name too.
+      - name: Require a green CI run from a push to main on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ci=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main" \
+            --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml" and .head_sha == env.SHA)]
+                  | sort_by(.created_at) | last | (.conclusion // .status // "missing")')
+          echo "CI (push to main) on $SHA: $ci"
+          if [[ "$ci" != "success" ]]; then
+            echo "::error::CI on $SHA is '$ci'. Land the commit on main, let CI pass, then re-run this workflow."
+            exit 1
+          fi
+
+  # The source gem, for every platform without a precompiled gem. Installing it compiles
+  # the extension, so it needs a Rust toolchain.
+  source-gem:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: false
+      - run: gem build sequel-sqlformat.gemspec --output "sequel-sqlformat-${VERSION}.gem"
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gem-ruby
+          path: sequel-sqlformat-*.gem
+          if-no-files-found: error
+
+  # One precompiled gem per platform, holding a library for each Ruby minor version.
+  cross-gem:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        platform: [x86_64-linux, aarch64-linux, x86_64-darwin, arm64-darwin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oxidize-rb/actions/setup-ruby-and-rust@ec90b4aa48795518d79be3f5cc478d1d7ccd02a8 # v1.5.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: false
+          cargo-cache: false
+          cargo-vendor: true
+      - uses: oxidize-rb/actions/cross-gem@ec90b4aa48795518d79be3f5cc478d1d7ccd02a8 # v1.5.0
+        id: cross-gem
+        with:
+          platform: ${{ matrix.platform }}
+          ruby-versions: "3.3,3.4,4.0"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gem-${{ matrix.platform }}
+          path: ${{ steps.cross-gem.outputs.gem-path }}
+          if-no-files-found: error
+
+  # Each precompiled gem, on a runner of its own platform and each supported Ruby:
+  # install it with no Rust toolchain into an empty GEM_HOME, require the precompiled
+  # library (not a fresh build), and format SQL.
+  check:
+    needs: [verify, cross-gem]
+    runs-on: ${{ matrix.runner }}
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: x86_64-linux, runner: ubuntu-latest }
+          - { platform: aarch64-linux, runner: ubuntu-24.04-arm }
+          - { platform: x86_64-darwin, runner: macos-15-intel }
+          - { platform: arm64-darwin, runner: macos-latest }
+        ruby: ["3.3", "3.4", "4.0"]
+    steps:
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gem-${{ matrix.platform }}
+          path: gems
+      - name: Install the precompiled gem and format SQL with it
+        run: | # zizmor: ignore[adhoc-packages]
+          set -euo pipefail
+          home=$(mktemp -d)
+          export GEM_HOME="$home" GEM_PATH="$home"
+          # Fetches sequel from rubygems.org; a precompiled gem must not pull in rb_sys.
+          gem install --no-document gems/*.gem
+          # The script is Ruby, so its $LOADED_FEATURES must not expand in the shell.
+          # shellcheck disable=SC2016
+          ruby -e '
+            abort "rb_sys was installed, so the precompiled gem still depends on it" if Gem::Specification.find_all_by_name("rb_sys").any?
+            require "sequel"
+            db = Sequel.mock(host: :postgres).extension(:sqlformat)
+            minor = RUBY_VERSION[/\A\d+\.\d+/]
+            lib = $LOADED_FEATURES.grep(%r{/sequel/sqlformat/#{Regexp.escape(minor)}/sequel_sqlformat\.}).first
+            abort "did not load the precompiled library for Ruby #{minor}" unless lib
+            out = db[:t].formatted_sql(uppercase: true)
+            abort "unexpected output: #{out.inspect}" unless out == "SELECT\n  *\nFROM\n  \"t\""
+            puts "#{RUBY_PLATFORM} Ruby #{RUBY_VERSION}: loaded #{lib}"'
+
+  # Holds publish rights, so it installs no bundle and runs no development dependency.
+  publish:
+    needs: [verify, source-gem, check]
+    runs-on: ubuntu-latest
+    environment: release
+    # Required by the OIDC token exchange; scoped to this job only.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: gem-*
+          path: gems
+          merge-multiple: true
+      - name: Require exactly the expected gems
+        run: |
+          set -euo pipefail
+          ls -l gems
+          for p in "" -x86_64-linux -aarch64-linux -x86_64-darwin -arm64-darwin; do
+            test -f "gems/sequel-sqlformat-${VERSION}${p}.gem" || { echo "::error::missing sequel-sqlformat-${VERSION}${p}.gem"; exit 1; }
+          done
+          [[ $(find gems -name '*.gem' | wc -l) -eq 5 ]] || { echo "::error::expected 5 gems"; exit 1; }
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: false
+      # Trusted publishing: exchanges this job's OIDC token for a short-lived rubygems
+      # API key.
+      - uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
+      # Native gems first, the source gem last: a platform that resolves the version
+      # before its native gem is up would otherwise fall back to a source build.
+      # No retry. A failed push fails the run; investigate before re-running.
+      - name: Push to rubygems.org
+        run: |
+          set -euo pipefail
+          for p in -x86_64-linux -aarch64-linux -x86_64-darwin -arm64-darwin ""; do
+            gem push "gems/sequel-sqlformat-${VERSION}${p}.gem"
+          done
+      # The run's colour is not the evidence; the versions on rubygems.org are. Polled
+      # because rubygems' CDN can lag the push.
+      - name: Confirm rubygems.org serves every platform of the new version
+        run: |
+          for i in $(seq 1 30); do
+            found=$(curl -fsS https://rubygems.org/api/v1/versions/sequel-sqlformat.json \
+              | jq -r --arg v "$VERSION" '[.[] | select(.number == $v)] | length' || true)
+            echo "attempt $i: rubygems lists ${found:-?} of 5 gems for $VERSION"
+            [[ "$found" == "5" ]] && exit 0
+            sleep 10
+          done
+          echo "::error::rubygems.org does not list all 5 gems for $VERSION"
+          exit 1

@@ -1,0 +1,106 @@
+name: CI
+
+# One run per PR push and one on merge: `push` is limited to main, because a push to a
+# branch with an open PR fires both events.
+#
+# Every action is pinned to a full commit SHA with its version in a comment. A tag can
+# be moved to other code; a SHA cannot. Dependabot proposes the bumps.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The same recipes the local gate runs: `just fmt-check lint hygiene`.
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # cog reads every commit since the last v* tag.
+          fetch-depth: 0
+      - uses: oxidize-rb/actions/setup-ruby-and-rust@ec90b4aa48795518d79be3f5cc478d1d7ccd02a8 # v1.5.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          cargo-cache: true
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - run: just fmt-check lint hygiene
+
+  # Builds the extension from source and runs the suite on each supported Ruby, on
+  # Linux and on macOS.
+  test:
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        ruby: ["3.3", "3.4", "4.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oxidize-rb/actions/setup-ruby-and-rust@ec90b4aa48795518d79be3f5cc478d1d7ccd02a8 # v1.5.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          cargo-cache: true
+      - run: bundle exec rake compile test
+
+  # `just package-check`: the built source gem installs into an empty GEM_HOME and works.
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oxidize-rb/actions/setup-ruby-and-rust@ec90b4aa48795518d79be3f5cc478d1d7ccd02a8 # v1.5.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          cargo-cache: true
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - run: just package-check # zizmor: ignore[adhoc-packages]
+
+  # The one check that branch protection and release.yml read. It passes only when every
+  # needed job's result is `success`; failure, cancelled and skipped all fail it. The
+  # guarded set is asserted by name, so a job dropped from `needs:` turns this red.
+  ci:
+    if: always()
+    needs: [lint, test, package]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check CI status
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          # Must list exactly the jobs named in `needs:` above.
+          EXPECTED_JOBS: '["lint", "package", "test"]'
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries | sort_by(.key)[] | "  \(.key) = \(.value.result)"' <<<"$NEEDS_JSON"
+          guarded=$(jq -r 'keys | join(", ")' <<<"$NEEDS_JSON")
+          expected=$(jq -r 'sort | join(", ")' <<<"$EXPECTED_JOBS")
+          if [[ "$guarded" != "$expected" ]]; then
+            echo "::error::needs: resolved to [$guarded], but this gate guards [$expected]. Update needs: and EXPECTED_JOBS together."
+            exit 1
+          fi
+          not_green=$(jq -r 'to_entries | map(select(.value.result != "success")) | map("\(.key)=\(.value.result)") | join(", ")' <<<"$NEEDS_JSON")
+          if [[ -n "$not_green" ]]; then
+            echo "::error::CI is not green: $not_green"
+            exit 1
+          fi
+          echo "All CI jobs passed"
