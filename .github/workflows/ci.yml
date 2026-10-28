@@ -36,8 +36,9 @@ jobs:
       - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
       - run: just fmt-check lint hygiene
 
-  # Builds the extension from source and runs the suite on each supported Ruby, on
-  # Linux and on macOS.
+  # `just test`: builds the extension from source and runs the suite on each supported
+  # Ruby, on Linux and on macOS. With lint and package, the jobs cover every recipe in
+  # `just ci`.
   test:
     runs-on: ${{ matrix.os }}
     permissions:
@@ -56,7 +57,8 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
           cargo-cache: true
-      - run: bundle exec rake compile test
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - run: just test
 
   # `just package-check`: the built source gem installs into an empty GEM_HOME and works.
   package:
